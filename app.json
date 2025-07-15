@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "HearLearnProject",
+    "slug": "HearLearnProject",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/IconApp.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/IconApp.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/IconApp.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.willianqf.HearLearnProject"
+    },
+    "web": {
+      "favicon": "./assets/IconApp.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "089558a7-f03c-467a-a435-e7b5ce899f25"
+      }
+    }
+  }
+}
