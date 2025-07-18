@@ -1,4 +1,3 @@
-import 'react-native-gesture-handler';
 import React from 'react';
 import { ThemeProvider } from './context/ThemeContext';
 import RootNavigator from './navigation/RootNavigator';

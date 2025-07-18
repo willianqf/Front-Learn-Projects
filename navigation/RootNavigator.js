@@ -5,7 +5,7 @@ import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 // MODIFICADO: Importamos Ionicons para os ícones
-import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons'; 
 import { StatusBar } from 'react-native';
 
 import { ThemeContext } from '../context/ThemeContext';
@@ -13,9 +13,9 @@ import LibraryScreen from '../screens/LibraryScreen';
 import PlayerScreen from '../screens/PlayerScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import AboutScreen from '../screens/AboutScreen';
-import StatsScreen from '../screens/StatsScreen';
+import StatsScreen from '../screens/StatsScreen'; 
 // NOVO: Importamos o ecrã de criação por voz
-import VoiceToPdfScreen from '../screens/VoiceToPdfScreen';
+import VoiceToPdfScreen from '../screens/VoiceToPdfScreen'; 
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -32,7 +32,6 @@ function LibraryStack() {
       }}
     >
       <Stack.Screen name="LibraryHome" component={LibraryScreen} options={{ headerShown: false }} />
-
       <Stack.Screen
         name="Player"
         component={PlayerScreen}
@@ -42,7 +41,6 @@ function LibraryStack() {
         })}
       />
     </Stack.Navigator>
-
   );
 }
 
@@ -99,8 +97,8 @@ export default function RootNavigator() {
           },
           tabBarActiveTintColor: colors.activeIcon,
           tabBarInactiveTintColor: colors.icon,
-          tabBarStyle: {
-            backgroundColor: colors.card,
+          tabBarStyle: { 
+            backgroundColor: colors.card, 
             borderTopColor: colors.card,
             elevation: 0,
           },
@@ -109,8 +107,8 @@ export default function RootNavigator() {
       >
         <Tab.Screen name="Biblioteca" component={LibraryStack} />
         {/* NOVO ECRÃ ADICIONADO À NAVEGAÇÃO */}
-        <Tab.Screen name="Criar" component={VoiceToPdfScreen} />
-        <Tab.Screen name="Estatísticas" component={StatsScreen} />
+        <Tab.Screen name="Criar" component={VoiceToPdfScreen} /> 
+        <Tab.Screen name="Estatísticas" component={StatsScreen} /> 
         <Tab.Screen name="Configurações" component={SettingsScreen} />
         <Tab.Screen name="Sobre" component={AboutScreen} />
       </Tab.Navigator>

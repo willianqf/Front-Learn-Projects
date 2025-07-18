@@ -1,18 +1,29 @@
-// /Front-and/screens/PlayerScreen.js
 import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
 import {
     StyleSheet, Text, View, TouchableOpacity, ScrollView,
-    ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView, Platform
+    ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, Dimensions
 } from 'react-native';
-import { WebView } from 'react-native-webview';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemeContext } from '../context/ThemeContext';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { updateBookState, addBookmark, removeBookmark, loadLibrary, saveAnnotation, removeAnnotation } from '../utils/libraryManager';
+import { updateBookState, addBookmark, removeBookmark, saveAnnotation, removeAnnotation, loadLibrary } from '../utils/libraryManager';
 
-// Componente HighlightedText para fallback
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
+
+
+let Pdf;
+let pdfAvailable = false;
+try {
+    Pdf = require('react-native-pdf').default;
+    pdfAvailable = true;
+} catch (error) {
+    console.warn('react-native-pdf não está disponível:', error);
+    pdfAvailable = false;
+}
+
 const HighlightedText = ({ text, currentWordIndex, colors }) => {
     const words = text ? text.split(/\s+/) : [];
     return (
@@ -31,256 +42,94 @@ const HighlightedText = ({ text, currentWordIndex, colors }) => {
     );
 };
 
-// Componente WebView para PDF com destaque de palavras
-const PdfWebViewWithHighlight = ({ source, page, colors, wordCoordinates, onError, onLoad }) => {
-    const webViewRef = useRef(null);
-
-    // Função para destacar palavra via JavaScript
-    const highlightWord = useCallback((coords) => {
-        if (!webViewRef.current || !coords) return;
-
-        const jsCode = `
-            (function() {
-                // Remove highlight anterior
-                const existingHighlight = document.getElementById('word-highlight');
-                if (existingHighlight) {
-                    existingHighlight.remove();
-                }
-                
-                // Cria novo highlight
-                const highlight = document.createElement('div');
-                highlight.id = 'word-highlight';
-                highlight.style.position = 'absolute';
-                highlight.style.left = '${coords.x0}px';
-                highlight.style.top = '${coords.y0}px';
-                highlight.style.width = '${coords.x1 - coords.x0}px';
-                highlight.style.height = '${coords.y1 - coords.y0}px';
-                highlight.style.backgroundColor = '${colors.primary}';
-                highlight.style.opacity = '0.4';
-                highlight.style.borderRadius = '3px';
-                highlight.style.pointerEvents = 'none';
-                highlight.style.zIndex = '1000';
-                
-                // Adiciona ao viewer
-                const viewer = document.getElementById('pdf-viewer');
-                if (viewer) {
-                    viewer.appendChild(highlight);
-                }
-                
-                // Auto-scroll para a palavra
-                highlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            })();
-        `;
-
-        webViewRef.current.postMessage(jsCode);
-    }, [colors.primary]);
-
-    // Atualiza highlight quando coordenadas mudam
-    useEffect(() => {
-        if (wordCoordinates) {
-            highlightWord(wordCoordinates);
-        }
-    }, [wordCoordinates, highlightWord]);
-
-    // HTML para renderizar PDF com PDF.js
-    const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                body { 
-                    margin: 0; 
-                    padding: 0; 
-                    background: #f0f0f0; 
-                    font-family: Arial, sans-serif;
-                }
-                #pdf-viewer { 
-                    width: 100%; 
-                    height: 100vh; 
-                    position: relative;
-                    overflow: auto;
-                }
-                #pdf-canvas { 
-                    display: block; 
-                    margin: 0 auto; 
-                    max-width: 100%;
-                    position: relative;
-                }
-                .loading { 
-                    text-align: center; 
-                    padding: 20px; 
-                    color: #666;
-                }
-                .error {
-                    text-align: center;
-                    padding: 20px;
-                    color: #d32f2f;
-                    background: #ffebee;
-                    margin: 20px;
-                    border-radius: 8px;
-                }
-            </style>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
-        </head>
-        <body>
-            <div id="pdf-viewer">
-                <div class="loading">Carregando PDF...</div>
-            </div>
-            
-            <script>
-                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-                
-                let currentPdf = null;
-                let currentPage = null;
-                let currentScale = 1.5;
-                
-                async function loadPdf() {
-                    try {
-                        const loadingTask = pdfjsLib.getDocument('${source}');
-                        currentPdf = await loadingTask.promise;
-                        await renderPage(${page});
-                        
-                        // Notifica que carregou
-                        window.ReactNativeWebView.postMessage(JSON.stringify({
-                            type: 'loaded',
-                            totalPages: currentPdf.numPages
-                        }));
-                    } catch (error) {
-                        console.error('Erro ao carregar PDF:', error);
-                        showError('Erro ao carregar PDF: ' + error.message);
-                        window.ReactNativeWebView.postMessage(JSON.stringify({
-                            type: 'error',
-                            message: error.message
-                        }));
-                    }
-                }
-                
-                async function renderPage(pageNumber) {
-                    try {
-                        currentPage = await currentPdf.getPage(pageNumber);
-                        const viewport = currentPage.getViewport({ scale: currentScale });
-                        
-                        // Limpa viewer anterior
-                        const viewer = document.getElementById('pdf-viewer');
-                        viewer.innerHTML = '';
-                        
-                        // Cria canvas
-                        const canvas = document.createElement('canvas');
-                        canvas.id = 'pdf-canvas';
-                        const context = canvas.getContext('2d');
-                        canvas.height = viewport.height;
-                        canvas.width = viewport.width;
-                        
-                        // Renderiza página
-                        const renderContext = {
-                            canvasContext: context,
-                            viewport: viewport
-                        };
-                        
-                        await currentPage.render(renderContext).promise;
-                        viewer.appendChild(canvas);
-                        
-                        // Ajusta tamanho do viewer
-                        viewer.style.height = viewport.height + 'px';
-                        viewer.style.width = viewport.width + 'px';
-                        
-                    } catch (error) {
-                        console.error('Erro ao renderizar página:', error);
-                        showError('Erro ao renderizar página: ' + error.message);
-                    }
-                }
-                
-                function showError(message) {
-                    const viewer = document.getElementById('pdf-viewer');
-                    viewer.innerHTML = '<div class="error">' + message + '</div>';
-                }
-                
-                function zoomIn() {
-                    currentScale *= 1.2;
-                    if (currentPage) renderPage(currentPage.pageNumber);
-                }
-                
-                function zoomOut() {
-                    currentScale /= 1.2;
-                    if (currentPage) renderPage(currentPage.pageNumber);
-                }
-                
-                // Escuta mensagens do React Native
-                window.addEventListener('message', function(event) {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'zoom') {
-                        if (data.action === 'in') zoomIn();
-                        else if (data.action === 'out') zoomOut();
-                    }
-                });
-                
-                // Escuta mensagens via postMessage (para highlight)
-                document.addEventListener('message', function(event) {
-                    if (typeof event.data === 'string') {
-                        try {
-                            eval(event.data);
-                        } catch (e) {
-                            console.error('Erro ao executar JS:', e);
-                        }
-                    }
-                });
-                
-                // Carrega PDF quando a página estiver pronta
-                loadPdf();
-            </script>
-        </body>
-        </html>
-    `;
-
-    return (
-        <WebView
-            ref={webViewRef}
-            originWhitelist={['*']}
-            source={{ html: htmlContent }}
-            style={styles.webview}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            allowFileAccess={true}
-            allowUniversalAccessFromFileURLs={true}
-            onMessage={(event) => {
-                try {
-                    const data = JSON.parse(event.nativeEvent.data);
-                    if (data.type === 'loaded') {
-                        onLoad && onLoad(data);
-                    } else if (data.type === 'error') {
-                        onError && onError(data.message);
-                    }
-                } catch (e) {
-                    console.log('Mensagem não-JSON do WebView:', event.nativeEvent.data);
-                }
-            }}
-            onError={(error) => {
-                console.error('WebView Error:', error);
-                onError && onError(error.nativeEvent.description);
-            }}
-            onLoadEnd={() => {
-                console.log('WebView carregou');
-            }}
-        />
-    );
-};
-
-// Componente de fallback
-const PdfFallback = ({ colors, message = "Visualização em PDF não disponível" }) => (
+const PdfFallback = ({ colors }) => (
     <View style={[styles.centered, { padding: 20 }]}>
         <Ionicons name="document-text-outline" size={80} color={colors.subtext} />
         <Text style={[styles.fallbackText, { color: colors.text }]}>
-            {message}
+            Visualização em PDF não disponível
         </Text>
         <Text style={[styles.fallbackSubtext, { color: colors.subtext }]}>
-            Exibindo conteúdo em modo texto
+            O módulo react-native-pdf não está configurado corretamente
         </Text>
     </View>
 );
 
+const LUPA_SIZE = 200;
+const ZOOM_FACTOR = 1;
+
+const LUPA_VERTICAL_OFFSET = -LUPA_SIZE * 1.25;
+// Substitua o componente Magnifier inteiro por este
+
+const Magnifier = ({ source, page, isVisible, position, pdfLayout, pageData, currentWordIndex }) => {
+    const { colors } = useContext(ThemeContext);
+
+    const magnifierStyle = useAnimatedStyle(() => {
+        return {
+            opacity: isVisible.value,
+            top: position.touchY.value + LUPA_VERTICAL_OFFSET,
+            left: position.touchX.value - LUPA_SIZE / 2,
+            transform: [{ scale: withSpring(isVisible.value) }]
+        };
+    });
+
+    const contentStyle = useAnimatedStyle(() => {
+        const translateX = -position.pdfX.value * ZOOM_FACTOR + LUPA_SIZE / 2;
+        const translateY = -position.pdfY.value * ZOOM_FACTOR + LUPA_SIZE / 2;
+
+        return {
+            width: pdfLayout.width,
+            height: pdfLayout.height,
+            transform: [
+                { translateX },
+                { translateY },
+                { scale: ZOOM_FACTOR },
+            ],
+        };
+    });
+
+    // --- LÓGICA DO DESTAQUE ADICIONADA AQUI ---
+    // Pega os dados da palavra atual para o destaque
+    const wordData =
+        pageData?.palavras && currentWordIndex >= 0 && currentWordIndex < pageData.palavras.length
+            ? pageData.palavras[currentWordIndex]
+            : null;
+
+    if (!pdfAvailable || !pdfLayout.width || !pdfLayout.height) return null;
+
+    return (
+        <Animated.View style={[styles.lupaContainer, { borderColor: colors.primary, width: LUPA_SIZE, height: LUPA_SIZE, borderRadius: LUPA_SIZE / 2 }, magnifierStyle]} pointerEvents="none">
+            <Animated.View style={[{ width: pdfLayout.width, height: pdfLayout.height, backgroundColor: 'white', overflow: 'hidden' }, contentStyle]}>
+                <Pdf
+                    source={source}
+                    page={page}
+                    style={{ flex: 1 }}
+                    fitPolicy={0}
+                    enableDoubleTapZoom={false} // Mantemos o zoom desativado aqui também
+                />
+
+                {/* --- RENDERIZAÇÃO DO DESTAQUE DENTRO DA LUPA --- */}
+                {wordData?.coords && (
+                    <View
+                        style={[
+                            styles.wordHighlight, // Reutilizamos o estilo de opacidade
+                            {
+                                position: 'absolute',
+                                // Usamos as coordenadas originais da palavra
+                                top: wordData.coords.y0,
+                                left: wordData.coords.x0,
+                                width: wordData.coords.x1 - wordData.coords.x0,
+                                height: wordData.coords.y1 - wordData.coords.y0,
+                                backgroundColor: colors.primary,
+                            }
+                        ]}
+                    />
+                )}
+            </Animated.View>
+        </Animated.View>
+    );
+};
+
 export default function PlayerScreen({ route }) {
-    // Verificação inicial das informações do livro
     if (!route.params || !route.params.bookInfo) {
         return (
             <View style={styles.centered}>
@@ -296,7 +145,6 @@ export default function PlayerScreen({ route }) {
     const navigation = useNavigation();
     const { bookInfo } = route.params;
 
-    // Estados
     const [currentPageIndex, setCurrentPageIndex] = useState(bookInfo.lastPosition || 0);
     const [pageData, setPageData] = useState(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -308,18 +156,67 @@ export default function PlayerScreen({ route }) {
     const [bookmarkModalVisible, setBookmarkModalVisible] = useState(false);
     const [annotationModalVisible, setAnnotationModalVisible] = useState(false);
     const [currentAnnotation, setCurrentAnnotation] = useState('');
-    const [pdfError, setPdfError] = useState(false);
-    const [viewMode, setViewMode] = useState('auto'); // 'auto', 'text', 'pdf'
-    const [pdfLoaded, setPdfLoaded] = useState(false);
+    const [pdfLayout, setPdfLayout] = useState({ width: 1, height: 1 });
+    const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
+    const [pdfScale, setPdfScale] = useState(1);
+    const [pdfOffsets, setPdfOffsets] = useState({ top: 0, left: 0 });
 
-    // Refs
+    const [isPageLoading, setIsPageLoading] = useState(true);
+
     const isPlayingRef = useRef(isPlaying);
     const speechStartIndex = useRef(0);
     const timeListenedRef = useRef(0);
     const intervalRef = useRef(null);
 
-    // Hooks existentes
-    const loadBookData = useCallback(async () => {
+    const isLupaVisible = useSharedValue(0);
+    const lupaPosition = {
+        touchX: useSharedValue(0),
+        touchY: useSharedValue(0),
+        pdfX: useSharedValue(0),
+        pdfY: useSharedValue(0),
+    };
+
+
+    const panGesture = Gesture.Pan()
+        .onBegin((e) => {
+            if (pdfScale > 0) {
+                // Armazena a posição do toque (dedo)
+                lupaPosition.touchX.value = e.x;
+                lupaPosition.touchY.value = e.y;
+
+                // Calcula a posição do CENTRO da Lupa na tela
+                const magnifierCenterX = e.x; // Horizontalmente, o centro da lupa e o dedo estão alinhados
+                const magnifierCenterY = e.y + LUPA_VERTICAL_OFFSET + (LUPA_SIZE / 2); // Verticalmente, consideramos o deslocamento
+
+                // Converte as coordenadas do centro da lupa para as coordenadas do PDF original
+                lupaPosition.pdfX.value = (magnifierCenterX - pdfOffsets.left) / pdfScale;
+                lupaPosition.pdfY.value = (magnifierCenterY - pdfOffsets.top) / pdfScale;
+
+                isLupaVisible.value = withSpring(1, { damping: 15, stiffness: 200 });
+            }
+        })
+        .onUpdate((e) => {
+            if (pdfScale > 0) {
+                // Repete a mesma lógica durante o movimento
+                lupaPosition.touchX.value = e.x;
+                lupaPosition.touchY.value = e.y;
+
+                const magnifierCenterX = e.x;
+                const magnifierCenterY = e.y + LUPA_VERTICAL_OFFSET + (LUPA_SIZE / 2);
+
+                lupaPosition.pdfX.value = (magnifierCenterX - pdfOffsets.left) / pdfScale;
+                lupaPosition.pdfY.value = (magnifierCenterY - pdfOffsets.top) / pdfScale;
+            }
+        })
+        .onEnd(() => {
+            isLupaVisible.value = withSpring(0);
+        })
+        .onFinalize(() => {
+            isLupaVisible.value = withSpring(0);
+        });
+
+
+    const loadUpdatedBookData = useCallback(async () => {
         const library = await loadLibrary();
         const currentBook = library.find(b => b.id_arquivo === bookInfo.id_arquivo);
         if (currentBook) {
@@ -328,7 +225,7 @@ export default function PlayerScreen({ route }) {
         }
     }, [bookInfo.id_arquivo]);
 
-    useFocusEffect(useCallback(() => { loadBookData(); }, [loadBookData]));
+    useFocusEffect(useCallback(() => { loadUpdatedBookData(); }, [loadUpdatedBookData]));
 
     useFocusEffect(useCallback(() => {
         navigation.setOptions({ title: bookInfo.nome_original });
@@ -351,12 +248,40 @@ export default function PlayerScreen({ route }) {
     }, []);
 
     useEffect(() => {
+        if (pdfLayout.width > 1 && containerLayout.width > 0 && containerLayout.height > 0) {
+            // Calcula a escala para caber na largura e na altura
+            const scaleToFitWidth = containerLayout.width / pdfLayout.width;
+            const scaleToFitHeight = containerLayout.height / pdfLayout.height;
+            const scale = Math.min(scaleToFitWidth, scaleToFitHeight);
+
+            // Calcula as dimensões e os deslocamentos
+            const scaledPdfWidth = pdfLayout.width * scale;
+            const scaledPdfHeight = pdfLayout.height * scale;
+            const topOffset = (containerLayout.height - scaledPdfHeight) / 2;
+            const leftOffset = (containerLayout.width - scaledPdfWidth) / 2;
+
+            // 1. Primeiro, agenda as atualizações de layout
+            setPdfScale(scale);
+            setPdfOffsets({ top: topOffset, left: leftOffset });
+
+            // 2. SÓ DEPOIS, sinaliza que o carregamento terminou
+            setIsPageLoading(false);
+        }
+    }, [pdfLayout, containerLayout]);
+
+    useEffect(() => {
+        setIsPageLoading(true);
         if (bookInfo.pagesData && bookInfo.pagesData[currentPageIndex]) {
             const newPageData = bookInfo.pagesData[currentPageIndex];
             setPageData(newPageData);
             setCurrentWordIndex(-1);
-            setPdfError(false);
-            setPdfLoaded(false);
+
+            if (newPageData.dimensoes && newPageData.dimensoes.largura > 0) {
+                setPdfLayout({
+                    width: newPageData.dimensoes.largura,
+                    height: newPageData.dimensoes.altura
+                });
+            }
         }
     }, [currentPageIndex, bookInfo.pagesData]);
 
@@ -371,48 +296,20 @@ export default function PlayerScreen({ route }) {
         navigation.setOptions({
             headerRight: () => (
                 <View style={styles.headerButtons}>
-                    <TouchableOpacity
-                        onPress={() => setViewMode(viewMode === 'text' ? 'pdf' : 'text')}
-                        style={styles.headerIcon}
-                    >
-                        <Ionicons
-                            name={viewMode === 'text' ? "document-text" : "document"}
-                            size={24}
-                            color={colors.primary}
-                        />
+                    <TouchableOpacity onPress={() => { setCurrentAnnotation(annotations[currentPageIndex] || ''); setAnnotationModalVisible(true); }} style={styles.headerIcon}>
+                        <Ionicons name={hasAnnotation ? "reader" : "reader-outline"} size={26} color={colors.primary} />
                     </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => {
-                            setCurrentAnnotation(annotations[currentPageIndex] || '');
-                            setAnnotationModalVisible(true);
-                        }}
-                        style={styles.headerIcon}
-                    >
-                        <Ionicons
-                            name={hasAnnotation ? "reader" : "reader-outline"}
-                            size={26}
-                            color={colors.primary}
-                        />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => setBookmarkModalVisible(true)}
-                        style={styles.headerIcon}
-                    >
+                    <TouchableOpacity onPress={() => setBookmarkModalVisible(true)} style={styles.headerIcon}>
                         <Ionicons name="list" size={28} color={colors.primary} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => toggleBookmark(currentPageIndex)}>
-                        <Ionicons
-                            name={bookmarks.includes(currentPageIndex) ? "bookmark" : "bookmark-outline"}
-                            size={24}
-                            color={colors.primary}
-                        />
+                        <Ionicons name={bookmarks.includes(currentPageIndex) ? "bookmark" : "bookmark-outline"} size={24} color={colors.primary} />
                     </TouchableOpacity>
                 </View>
             ),
         });
-    }, [navigation, colors.primary, bookmarks, annotations, currentPageIndex, viewMode]);
+    }, [navigation, colors.primary, bookmarks, annotations, currentPageIndex]);
 
-    // Funções auxiliares
     const startTimer = () => {
         if (intervalRef.current) clearInterval(intervalRef.current);
         intervalRef.current = setInterval(() => { timeListenedRef.current += 1; }, 1000);
@@ -425,13 +322,6 @@ export default function PlayerScreen({ route }) {
         }
     };
 
-    const getWordCoordinates = (wordIndex) => {
-        if (!pageData?.palavras || wordIndex < 0 || wordIndex >= pageData.palavras.length) {
-            return null;
-        }
-        return pageData.palavras[wordIndex]?.coords;
-    };
-
     const startSpeech = useCallback((textToSpeak, rate, fromWordIndex, voiceIdentifier) => {
         if (!textToSpeak || !textToSpeak.trim()) { setIsPlaying(false); return; }
         const words = textToSpeak.split(/\s+/);
@@ -439,7 +329,6 @@ export default function PlayerScreen({ route }) {
         speechStartIndex.current = startIndex;
         const textSegment = words.slice(startIndex).join(' ');
         if (!textSegment) { setIsPlaying(false); return; }
-
         Speech.speak(textSegment, {
             language: 'pt-BR', rate, voice: voiceIdentifier,
             onDone: () => {
@@ -521,7 +410,7 @@ export default function PlayerScreen({ route }) {
         } else {
             await removeAnnotation(bookInfo.id_arquivo, currentPageIndex);
         }
-        loadBookData();
+        loadUpdatedBookData();
         setAnnotationModalVisible(false);
     };
 
@@ -531,200 +420,148 @@ export default function PlayerScreen({ route }) {
         } else {
             await addBookmark(bookInfo.id_arquivo, pageIndex);
         }
-        loadBookData();
+        loadUpdatedBookData();
+    };
+
+
+    const getWordCoordinates = (wordIndex) => {
+        if (!pageData?.palavras || wordIndex < 0 || wordIndex >= pageData.palavras.length) {
+            return null;
+        }
+        return pageData.palavras[wordIndex];
     };
 
     const renderContent = () => {
-        if (!pageData) {
+        if (isPageLoading || !pageData) {
             return <ActivityIndicator size="large" color={colors.primary} style={styles.centered} />;
         }
 
-        // Determinar modo de visualização
-        const shouldShowText = viewMode === 'text' ||
-            pageData.extraido_por_ocr ||
-            !bookInfo.localUri ||
-            pdfError;
-
-        if (shouldShowText) {
-            return (
-                <HighlightedText
-                    text={pageData.texto_completo}
-                    currentWordIndex={currentWordIndex}
-                    colors={colors}
-                />
-            );
+        if (pageData.extraido_por_ocr || !bookInfo.localUri) {
+            return <HighlightedText text={pageData.texto_completo} currentWordIndex={currentWordIndex} colors={colors} />;
         }
 
-        // Tentar mostrar PDF via WebView com coordenadas
-        if (viewMode === 'pdf' && bookInfo.localUri) {
-            const wordCoords = getWordCoordinates(currentWordIndex);
-
-            return (
-                <PdfWebViewWithHighlight
-                    source={bookInfo.localUri}
-                    page={currentPageIndex + 1}
-                    colors={colors}
-                    wordCoordinates={wordCoords}
-                    onError={(error) => {
-                        console.error('Erro ao carregar PDF:', error);
-                        setPdfError(true);
-                    }}
-                    onLoad={(data) => {
-                        setPdfLoaded(true);
-                        console.log('PDF carregado, total de páginas:', data.totalPages);
-                    }}
-                />
-            );
+        if (!pdfAvailable) {
+            return <PdfFallback colors={colors} />;
         }
 
-        // Fallback
-        return <PdfFallback colors={colors} />;
+        const wordData = getWordCoordinates(currentWordIndex);
+
+        return (
+            <GestureDetector gesture={panGesture}>
+                {/* Usamos um container que preenche a área para posicionar os elementos */}
+                <View style={styles.flexOne}>
+                    {/* Container do PDF posicionado de forma absoluta para garantir a centralização */}
+                    <View
+                        style={{
+                            position: 'absolute',
+                            left: pdfOffsets.left,
+                            top: pdfOffsets.top,
+                            width: pdfLayout.width * pdfScale,
+                            height: pdfLayout.height * pdfScale,
+                        }}
+                    >
+                        <Pdf
+                            key={`pdf-page-${currentPageIndex}`}
+                            source={{ uri: bookInfo.localUri }}
+                            page={currentPageIndex + 1}
+                            style={styles.flexOne} // Ocupa todo o container
+                            onError={(error) => console.error('Erro ao carregar PDF local:', error)}
+                            fitPolicy={0} // A política de ajuste não é mais crítica, mas pode ser mantida
+                            enablePaging={false}
+                            enableDoubleTapZoom={false}
+                        />
+                    </View>
+
+                    {/* Destaque de palavra (agora usará os offsets corretos) */}
+                    {wordData?.coords && pdfScale > 0 && (
+                        <View
+                            pointerEvents="none"
+                            style={[
+                                styles.wordHighlight,
+                                {
+                                    position: 'absolute',
+                                    top: (wordData.coords.y0 * pdfScale) + pdfOffsets.top,
+                                    left: (wordData.coords.x0 * pdfScale) + pdfOffsets.left,
+                                    width: (wordData.coords.x1 - wordData.coords.x0) * pdfScale,
+                                    height: (wordData.coords.y1 - wordData.coords.y0) * pdfScale,
+                                    backgroundColor: colors.primary,
+                                }
+                            ]}
+                        />
+                    )}
+
+                    {/* A Lupa (agora receberá as coordenadas corretas) */}
+                    <Magnifier
+                        source={{ uri: bookInfo.localUri }}
+                        page={currentPageIndex + 1}
+                        isVisible={isLupaVisible}
+                        position={lupaPosition}
+                        pdfLayout={pdfLayout}
+                        // Adicione as duas linhas abaixo
+                        pageData={pageData}
+                        currentWordIndex={currentWordIndex}
+                    />
+                </View>
+            </GestureDetector>
+        );
     };
-
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
-            {/* Modais permanecem os mesmos */}
-            <Modal
-                animationType="slide"
-                transparent={true}
-                visible={annotationModalVisible}
-                onRequestClose={() => setAnnotationModalVisible(false)}
-            >
+            <Modal animationType="slide" transparent={true} visible={annotationModalVisible} onRequestClose={() => setAnnotationModalVisible(false)}>
                 <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalContainer}>
                     <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
-                        <Text style={[styles.modalTitle, { color: colors.text }]}>
-                            Anotação - Página {currentPageIndex + 1}
-                        </Text>
-                        <TextInput
-                            style={[styles.annotationInput, {
-                                color: colors.text,
-                                backgroundColor: colors.background,
-                                borderColor: colors.subtext
-                            }]}
-                            multiline
-                            placeholder="Escreva sua nota aqui..."
-                            placeholderTextColor={colors.subtext}
-                            value={currentAnnotation}
-                            onChangeText={setCurrentAnnotation}
-                            autoFocus
-                        />
+                        <Text style={[styles.modalTitle, { color: colors.text }]}>Anotação - Página {currentPageIndex + 1}</Text>
+                        <TextInput style={[styles.annotationInput, { color: colors.text, backgroundColor: colors.background, borderColor: colors.subtext }]} multiline placeholder="Escreva sua nota aqui..." placeholderTextColor={colors.subtext} value={currentAnnotation} onChangeText={setCurrentAnnotation} autoFocus />
                         <View style={styles.modalButtons}>
-                            <TouchableOpacity
-                                onPress={() => setAnnotationModalVisible(false)}
-                                style={styles.cancelButton}
-                            >
-                                <Text style={[styles.cancelButtonText, { color: colors.text }]}>
-                                    Cancelar
-                                </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={handleSaveAnnotation}
-                                style={[styles.saveButton, { backgroundColor: colors.primary }]}
-                            >
-                                <Text style={styles.saveButtonText}>Salvar</Text>
-                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => setAnnotationModalVisible(false)} style={styles.cancelButton}><Text style={[styles.cancelButtonText, { color: colors.text }]}>Cancelar</Text></TouchableOpacity>
+                            <TouchableOpacity onPress={handleSaveAnnotation} style={[styles.saveButton, { backgroundColor: colors.primary }]}><Text style={styles.saveButtonText}>Salvar</Text></TouchableOpacity>
                         </View>
                     </View>
                 </KeyboardAvoidingView>
             </Modal>
-
-            <Modal
-                animationType="slide"
-                transparent={true}
-                visible={bookmarkModalVisible}
-                onRequestClose={() => setBookmarkModalVisible(false)}
-            >
+            <Modal animationType="slide" transparent={true} visible={bookmarkModalVisible} onRequestClose={() => setBookmarkModalVisible(false)}>
                 <View style={styles.modalContainer}>
                     <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
                         <Text style={[styles.modalTitle, { color: colors.text }]}>Marcadores</Text>
                         <ScrollView>
                             {bookmarks.length > 0 ? (
                                 bookmarks.map((page, index) => (
-                                    <TouchableOpacity
-                                        key={index}
-                                        style={styles.bookmarkItem}
-                                        onPress={() => handleJumpToBookmark(page)}
-                                    >
+                                    <TouchableOpacity key={index} style={styles.bookmarkItem} onPress={() => handleJumpToBookmark(page)}>
                                         <Ionicons name="bookmark" size={20} color={colors.primary} />
-                                        <Text style={[styles.bookmarkText, { color: colors.text }]}>
-                                            Página {page + 1}
-                                        </Text>
+                                        <Text style={[styles.bookmarkText, { color: colors.text }]}>Página {page + 1}</Text>
                                     </TouchableOpacity>
                                 ))
-                            ) : (
-                                <Text style={[styles.noBookmarksText, { color: colors.subtext }]}>
-                                    Nenhuma página marcada.
-                                </Text>
-                            )}
+                            ) : (<Text style={[styles.noBookmarksText, { color: colors.subtext }]}>Nenhuma página marcada.</Text>)}
                         </ScrollView>
-                        <TouchableOpacity
-                            onPress={() => setBookmarkModalVisible(false)}
-                            style={[styles.closeButton, { backgroundColor: colors.primary }]}
-                        >
-                            <Text style={styles.closeButtonText}>Fechar</Text>
-                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setBookmarkModalVisible(false)} style={[styles.closeButton, { backgroundColor: colors.primary }]}><Text style={styles.closeButtonText}>Fechar</Text></TouchableOpacity>
                     </View>
                 </View>
             </Modal>
 
-            <View style={styles.contentArea}>
+            <View
+                style={styles.contentArea}
+                onLayout={(event) => {
+                    const { width, height } = event.nativeEvent.layout;
+                    if (width > 0 && height > 0 && (width !== containerLayout.width || height !== containerLayout.height)) {
+                        setContainerLayout({ width, height });
+                    }
+                }}
+            >
                 {renderContent()}
             </View>
 
             <View style={[styles.controlsContainer, { borderTopColor: colors.subtext }]}>
-                <Text style={[styles.pageIndicator, { color: colors.subtext }]}>
-                    Página {currentPageIndex + 1} de {bookInfo.total_paginas}
-                </Text>
+                <Text style={[styles.pageIndicator, { color: colors.subtext }]}>Página {currentPageIndex + 1} de {bookInfo.total_paginas}</Text>
                 <View style={styles.playerControls}>
-                    <TouchableOpacity
-                        onPress={handlePrevious}
-                        disabled={currentPageIndex === 0}
-                    >
-                        <Ionicons
-                            name="play-skip-back-circle-outline"
-                            size={50}
-                            color={currentPageIndex === 0 ? colors.subtext : colors.text}
-                        />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={handlePlayPause}
-                        disabled={!pageData}
-                    >
-                        <Ionicons
-                            name={isPlaying ? 'pause-circle' : 'play-circle'}
-                            size={80}
-                            color={!pageData ? colors.subtext : colors.primary}
-                        />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={handleNext}
-                        disabled={currentPageIndex >= bookInfo.total_paginas - 1}
-                    >
-                        <Ionicons
-                            name="play-skip-forward-circle-outline"
-                            size={50}
-                            color={currentPageIndex >= bookInfo.total_paginas - 1 ? colors.subtext : colors.text}
-                        />
-                    </TouchableOpacity>
+                    <TouchableOpacity onPress={handlePrevious} disabled={currentPageIndex === 0}><Ionicons name="play-skip-back-circle-outline" size={50} color={currentPageIndex === 0 ? colors.subtext : colors.text} /></TouchableOpacity>
+                    <TouchableOpacity onPress={handlePlayPause} disabled={!pageData}><Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={80} color={!pageData ? colors.subtext : colors.primary} /></TouchableOpacity>
+                    <TouchableOpacity onPress={handleNext} disabled={currentPageIndex >= bookInfo.total_paginas - 1}><Ionicons name="play-skip-forward-circle-outline" size={50} color={currentPageIndex >= bookInfo.total_paginas - 1 ? colors.subtext : colors.text} /></TouchableOpacity>
                 </View>
                 <View style={styles.speedControls}>
                     <Text style={[styles.speedLabel, { color: colors.text }]}>Velocidade:</Text>
                     {[1.0, 1.25, 1.5, 2.0].map((speed) => (
-                        <TouchableOpacity
-                            key={speed}
-                            style={[
-                                styles.speedButton,
-                                { borderColor: colors.subtext },
-                                playbackRate === speed && { backgroundColor: colors.primary, borderColor: colors.primary }
-                            ]}
-                            onPress={() => handleChangeRate(speed)}
-                        >
-                            <Text style={playbackRate === speed ?
-                                styles.speedButtonTextActive :
-                                [styles.speedButtonText, { color: colors.text }]
-                            }>
-                                {speed.toFixed(1)}x
-                            </Text>
+                        <TouchableOpacity key={speed} style={[styles.speedButton, { borderColor: colors.subtext }, playbackRate === speed && { backgroundColor: colors.primary, borderColor: colors.primary }]} onPress={() => handleChangeRate(speed)}>
+                            <Text style={playbackRate === speed ? styles.speedButtonTextActive : [styles.speedButtonText, { color: colors.text }]}>{speed.toFixed(1)}x</Text>
                         </TouchableOpacity>
                     ))}
                 </View>
@@ -738,7 +575,20 @@ const styles = StyleSheet.create({
     contentArea: { flex: 3, overflow: 'hidden' },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     flexOne: { flex: 1 },
-    pdf: { flex: 1, width: '100%', height: '100%' },
+    pdf: {},
+    lupaContainer: {
+        position: 'absolute',
+        width: LUPA_SIZE,
+        height: LUPA_SIZE,
+        borderRadius: LUPA_SIZE / 2,
+        borderWidth: 3,
+        overflow: 'hidden',
+        elevation: 10,
+        shadowColor: '#000',
+        shadowOpacity: 0.5,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 5 },
+    },
     wordHighlight: { position: 'absolute', opacity: 0.4, borderRadius: 3, },
     textContainerScrollView: { padding: 20 },
     textContainer: { fontSize: 20, lineHeight: 30 },
