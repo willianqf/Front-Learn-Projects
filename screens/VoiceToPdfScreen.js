@@ -6,7 +6,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import axios from 'axios';
 
-const API_BASE_URL = 'https://back-and-learn-project.fly.dev';
+const API_BASE_URL = 'https://willianqf-audio-transcriber.hf.space'
+//const API_BASE_URL = 'https://back-and-learn-project.fly.dev';
 
 export default function VoiceToPdfScreen() {
     const { colors } = useContext(ThemeContext);
@@ -27,7 +28,7 @@ export default function VoiceToPdfScreen() {
             await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
             setStatusMessage('A gravar...');
             const { recording } = await Audio.Recording.createAsync(
-               Audio.RecordingOptionsPresets.HIGH_QUALITY
+                Audio.RecordingOptionsPresets.HIGH_QUALITY
             );
             setRecording(recording);
             setIsRecording(true);
@@ -56,7 +57,7 @@ export default function VoiceToPdfScreen() {
         }
         setRecording(null);
     };
-    
+
     const uploadAndTranscribeAudio = async (fileUri) => {
         const formData = new FormData();
         formData.append('audio', {
@@ -102,7 +103,7 @@ export default function VoiceToPdfScreen() {
             if (response.data && response.data.status === 'sucesso') {
                 const pdfUrl = response.data.url_pdf;
                 Alert.alert(
-                    "PDF Gerado!", 
+                    "PDF Gerado!",
                     "O seu PDF foi criado com sucesso.",
                     [{ text: "Abrir PDF", onPress: () => Linking.openURL(pdfUrl) }]
                 );
@@ -130,7 +131,7 @@ export default function VoiceToPdfScreen() {
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
             <Text style={[styles.headerTitle, { color: colors.text }]}>AudioEscrito para PDF</Text>
-            
+
             <ScrollView style={styles.textInputContainer}>
                 <TextInput
                     style={[styles.textInput, { color: colors.text, opacity: isProcessing ? 0.5 : 1 }]}
@@ -146,12 +147,12 @@ export default function VoiceToPdfScreen() {
             <Text style={[styles.statusText, { color: colors.subtext }]}>{statusMessage}</Text>
 
             <View style={styles.footer}>
-                 <TouchableOpacity onPress={() => setRecognizedText('')} disabled={isRecording || isProcessing} style={styles.actionButton}>
+                <TouchableOpacity onPress={() => setRecognizedText('')} disabled={isRecording || isProcessing} style={styles.actionButton}>
                     <Ionicons name="trash-outline" size={30} color={isRecording || isProcessing ? colors.subtext : colors.text} />
                 </TouchableOpacity>
 
-                <TouchableOpacity 
-                    onPress={handleMicPress} 
+                <TouchableOpacity
+                    onPress={handleMicPress}
                     disabled={isProcessing}
                     style={[styles.micButton, { backgroundColor: isRecording ? '#E71D36' : colors.primary }]}
                 >
