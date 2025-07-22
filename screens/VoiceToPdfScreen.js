@@ -1,19 +1,22 @@
 import React, { useState, useContext } from 'react';
-// NOVO: Adicionamos Linking para abrir o PDF
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, ScrollView, Alert, ActivityIndicator, Linking } from 'react-native';
+// --- INÍCIO DAS ALTERAÇÕES ---
+// Adiciona os imports necessários para lidar com ficheiros e partilha
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+// --- FIM DAS ALTERAÇÕES ---
 import { ThemeContext } from '../context/ThemeContext';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import axios from 'axios';
 
-const API_BASE_URL = 'https://willianqf-audio-transcriber.hf.space'
-//const API_BASE_URL = 'https://back-and-learn-project.fly.dev';
+const API_BASE_URL = 'https://willianqf-audio-transcriber.hf.space';
 
 export default function VoiceToPdfScreen() {
     const { colors } = useContext(ThemeContext);
     const [recording, setRecording] = useState(null);
     const [isRecording, setIsRecording] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false); // NOVO: Estado de loading geral (transcrição ou PDF)
+    const [isProcessing, setIsProcessing] = useState(false);
     const [recognizedText, setRecognizedText] = useState('');
     const [statusMessage, setStatusMessage] = useState('Pressione o botão para iniciar a gravação.');
 
@@ -75,7 +78,7 @@ export default function VoiceToPdfScreen() {
                 setRecognizedText(prevText => prevText ? `${prevText} ${response.data.texto}` : response.data.texto);
                 setStatusMessage('Texto transcrito! Edite se necessário e gere o PDF.');
             } else {
-                Alert.alert('Erro na Transcrição', 'Não foi possível obter o texto do áudio.');
+                Alert.alert('Erro na Transcrição', response.data.erro || 'Não foi possível obter o texto do áudio.');
             }
         } catch (error) {
             console.error('Erro ao enviar o áudio:', error);
@@ -85,7 +88,7 @@ export default function VoiceToPdfScreen() {
         }
     };
 
-    // NOVO: Função para gerar o PDF
+    // --- INÍCIO DA FUNÇÃO handleGeneratePdf CORRIGIDA ---
     const handleGeneratePdf = async () => {
         if (!recognizedText.trim()) {
             Alert.alert("Texto Vazio", "Não há texto para gerar um PDF.");
@@ -96,29 +99,61 @@ export default function VoiceToPdfScreen() {
         setStatusMessage('A gerar PDF...');
 
         try {
-            const response = await axios.post(`${API_BASE_URL}/gerar_pdf`, {
-                texto: recognizedText,
+            // Usamos 'fetch' que é melhor para lidar com dados binários (ficheiros)
+            const response = await fetch(`${API_BASE_URL}/gerar_pdf`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ texto: recognizedText }),
             });
 
-            if (response.data && response.data.status === 'sucesso') {
-                const pdfUrl = response.data.url_pdf;
-                Alert.alert(
-                    "PDF Gerado!",
-                    "O seu PDF foi criado com sucesso.",
-                    [{ text: "Abrir PDF", onPress: () => Linking.openURL(pdfUrl) }]
-                );
-            } else {
-                Alert.alert("Erro", "Falha ao gerar o PDF no servidor.");
+            // Verificamos se a resposta do servidor foi bem-sucedida
+            if (!response.ok) {
+                // Se o servidor enviou um erro, tentamos mostrar a mensagem
+                const errorData = await response.json();
+                throw new Error(errorData.erro || "Falha ao gerar o PDF no servidor.");
             }
+
+            // Pega o conteúdo do ficheiro como um 'blob'
+            const blob = await response.blob();
+
+            // Define um nome único para o ficheiro
+            const filename = `audioescrito_${Date.now()}.pdf`;
+            // Define o local onde o ficheiro será guardado no telemóvel
+            const fileUri = `${FileSystem.documentDirectory}${filename}`;
+
+            // Converte o blob para base64 para o FileSystem poder guardá-lo
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = async () => {
+                const base64data = reader.result;
+                // Guarda o ficheiro no dispositivo
+                await FileSystem.writeAsStringAsync(fileUri, base64data.split(',')[1], {
+                    encoding: FileSystem.EncodingType.Base64,
+                });
+
+                console.log("PDF guardado em:", fileUri);
+                setStatusMessage('PDF gerado! A abrir menu de partilha...');
+
+                // Abre o menu de partilha do sistema operativo
+                if (await Sharing.isAvailableAsync()) {
+                    await Sharing.shareAsync(fileUri);
+                } else {
+                    Alert.alert("Partilha não disponível", "Não é possível abrir o menu de partilha neste dispositivo.");
+                }
+                // Limpa o estado após a partilha
+                setIsProcessing(false);
+                setStatusMessage('Pressione o botão para iniciar uma nova gravação.');
+            };
 
         } catch (error) {
             console.error("Erro ao gerar PDF:", error);
-            Alert.alert("Erro de Rede", "Não foi possível conectar ao servidor para gerar o PDF.");
-        } finally {
+            Alert.alert("Erro", error.message || "Não foi possível conectar ao servidor para gerar o PDF.");
             setIsProcessing(false);
             setStatusMessage('Pressione o botão para iniciar uma nova gravação.');
         }
     };
+    // --- FIM DA FUNÇÃO handleGeneratePdf CORRIGIDA ---
+
 
     const handleMicPress = () => {
         if (isRecording) {

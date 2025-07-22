@@ -43,7 +43,7 @@ export default function AboutScreen() {
     <View style={styles.container}>
       <Image source={LogoApp} style={styles.logo} />
       <Text style={styles.title}>HearLearn</Text>
-      <Text style={styles.subtitle}>Versão 1.0.2</Text>
+      <Text style={styles.subtitle}>Versão 1.0.3</Text>
       <Text style={styles.description}>
         Desenvolvido com paixão por Willian Quirino.
       </Text>

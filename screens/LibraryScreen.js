@@ -12,7 +12,8 @@ import LogoApp from '../assets/LogoApp.png';
 import * as FileSystem from 'expo-file-system';
 
 //const API_BASE_URL = 'https://back-and-learn-project.fly.dev';
-const API_BASE_URL = 'https://back-and-learn-project.onrender.com'
+//const API_BASE_URL = 'https://back-and-learn-project.onrender.com'
+const API_BASE_URL = 'https://willianqf-audio-transcriber.hf.space'
 const cardColors = ['#2EC4B6', '#E71D36', '#FF9F1C', '#54478C', '#011627', '#20A4F3'];
 
 const getInitials = (name) => {
