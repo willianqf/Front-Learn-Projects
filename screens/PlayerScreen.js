@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useRef, useMemo } from 'react';
 import {
     StyleSheet, Text, View, TouchableOpacity, ScrollView,
-    ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, Dimensions
+    ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform, Image
 } from 'react-native';
 import * as Speech from 'expo-speech';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -11,8 +11,8 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { updateBookState, addBookmark, removeBookmark, saveAnnotation, removeAnnotation, loadLibrary } from '../utils/libraryManager';
 
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
-
+import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
+import { captureRef } from 'react-native-view-shot';
 
 let Pdf;
 let pdfAvailable = false;
@@ -54,74 +54,103 @@ const PdfFallback = ({ colors }) => (
     </View>
 );
 
+// Lupa via snapshot do container do PDF (sem segunda instância do Pdf)
 const LUPA_SIZE = 200;
-const ZOOM_FACTOR = 1;
-
 const LUPA_VERTICAL_OFFSET = -LUPA_SIZE * 1.25;
-// Substitua o componente Magnifier inteiro por este
+const MAGNIFIER_ZOOM = 2.0;
 
-const Magnifier = ({ source, page, isVisible, position, pdfLayout, pageData, currentWordIndex }) => {
+// opcional: debug e microajustes finos (se restar 1–2 dp de offset visual por conta de PixelRatio/border)
+const DEBUG_LUPA = false;
+const SHIFT_X = 0;
+const SHIFT_Y = 0;
+
+const Magnifier = ({ snapshotUri, isVisible, position, pdfLayout, pdfScale, pageData, currentWordIndex }) => {
     const { colors } = useContext(ThemeContext);
 
+    // Container da lente: sem scale animado (para não deslocar o centro visual)
     const magnifierStyle = useAnimatedStyle(() => {
         return {
             opacity: isVisible.value,
             top: position.touchY.value + LUPA_VERTICAL_OFFSET,
             left: position.touchX.value - LUPA_SIZE / 2,
-            transform: [{ scale: withSpring(isVisible.value) }]
         };
     });
 
+    // Conteúdo da lente:
+    // - Tamanho já ampliado: Wz = W * Z, Hz = H * Z
+    // - Apenas translate para colocar o ponto (sx,sy) no centro da lente
     const contentStyle = useAnimatedStyle(() => {
-        const translateX = -position.pdfX.value * ZOOM_FACTOR + LUPA_SIZE / 2;
-        const translateY = -position.pdfY.value * ZOOM_FACTOR + LUPA_SIZE / 2;
+        const Z = MAGNIFIER_ZOOM;
+        const W = pdfLayout.width * pdfScale;
+        const H = pdfLayout.height * pdfScale;
+
+        // ponto alvo no snapshot (em dp)
+        const sx = position.pdfX.value * pdfScale;
+        const sy = position.pdfY.value * pdfScale;
+
+        // centraliza (sx,sy) no centro da lente
+        const tx = (LUPA_SIZE / 2) - (sx * Z) + SHIFT_X;
+        const ty = (LUPA_SIZE / 2) - (sy * Z) + SHIFT_Y;
 
         return {
-            width: pdfLayout.width,
-            height: pdfLayout.height,
-            transform: [
-                { translateX },
-                { translateY },
-                { scale: ZOOM_FACTOR },
-            ],
+            width: W * Z,
+            height: H * Z,
+            transform: [{ translateX: tx }, { translateY: ty }],
         };
     });
 
-    // --- LÓGICA DO DESTAQUE ADICIONADA AQUI ---
-    // Pega os dados da palavra atual para o destaque
     const wordData =
         pageData?.palavras && currentWordIndex >= 0 && currentWordIndex < pageData.palavras.length
             ? pageData.palavras[currentWordIndex]
             : null;
 
-    if (!pdfAvailable || !pdfLayout.width || !pdfLayout.height) return null;
+    if (!snapshotUri || !pdfLayout.width || !pdfLayout.height) return null;
 
     return (
-        <Animated.View style={[styles.lupaContainer, { borderColor: colors.primary, width: LUPA_SIZE, height: LUPA_SIZE, borderRadius: LUPA_SIZE / 2 }, magnifierStyle]} pointerEvents="none">
-            <Animated.View style={[{ width: pdfLayout.width, height: pdfLayout.height, backgroundColor: 'white', overflow: 'hidden' }, contentStyle]}>
-                <Pdf
-                    source={source}
-                    page={page}
-                    style={{ flex: 1 }}
-                    fitPolicy={0}
-                    enableDoubleTapZoom={false} // Mantemos o zoom desativado aqui também
+        <Animated.View
+            style={[
+                styles.lupaContainer,
+                { borderColor: colors.primary, width: LUPA_SIZE, height: LUPA_SIZE, borderRadius: LUPA_SIZE / 2 },
+                magnifierStyle
+            ]}
+            pointerEvents="none"
+        >
+            <Animated.View style={[{ overflow: 'hidden' }, contentStyle]}>
+                <Image
+                    source={{ uri: snapshotUri }}
+                    style={{ width: '100%', height: '100%' }}
+                    resizeMode="stretch"
                 />
 
-                {/* --- RENDERIZAÇÃO DO DESTAQUE DENTRO DA LUPA --- */}
+                {/* Se quiser manter o highlight dentro da lente, ele precisa considerar Z */}
                 {wordData?.coords && (
                     <View
                         style={[
-                            styles.wordHighlight, // Reutilizamos o estilo de opacidade
+                            styles.wordHighlight,
                             {
                                 position: 'absolute',
-                                // Usamos as coordenadas originais da palavra
-                                top: wordData.coords.y0,
-                                left: wordData.coords.x0,
-                                width: wordData.coords.x1 - wordData.coords.x0,
-                                height: wordData.coords.y1 - wordData.coords.y0,
+                                top: wordData.coords.y0 * pdfScale * MAGNIFIER_ZOOM,
+                                left: wordData.coords.x0 * pdfScale * MAGNIFIER_ZOOM,
+                                width: (wordData.coords.x1 - wordData.coords.x0) * pdfScale * MAGNIFIER_ZOOM,
+                                height: (wordData.coords.y1 - wordData.coords.y0) * pdfScale * MAGNIFIER_ZOOM,
                                 backgroundColor: colors.primary,
                             }
                         ]}
+                    />
+                )}
+
+                {DEBUG_LUPA && (
+                    <View
+                        pointerEvents="none"
+                        style={{
+                            position: 'absolute',
+                            width: 8,
+                            height: 8,
+                            borderRadius: 4,
+                            backgroundColor: 'red',
+                            left: (LUPA_SIZE / 2) - 4,
+                            top: (LUPA_SIZE / 2) - 4,
+                        }}
                     />
                 )}
             </Animated.View>
@@ -160,13 +189,20 @@ export default function PlayerScreen({ route }) {
     const [containerLayout, setContainerLayout] = useState({ width: 0, height: 0 });
     const [pdfScale, setPdfScale] = useState(1);
     const [pdfOffsets, setPdfOffsets] = useState({ top: 0, left: 0 });
-
     const [isPageLoading, setIsPageLoading] = useState(true);
+
+    const pdfSource = useMemo(() => ({ uri: bookInfo.localUri }), [bookInfo.localUri]);
 
     const isPlayingRef = useRef(isPlaying);
     const speechStartIndex = useRef(0);
     const timeListenedRef = useRef(0);
     const intervalRef = useRef(null);
+
+    const [showMagnifier, setShowMagnifier] = useState(false);
+    const [snapshotUri, setSnapshotUri] = useState(null);
+
+    // Ref do CONTAINER do PDF (exatamente a área renderizada, sem offsets)
+    const pdfContainerRef = useRef(null);
 
     const isLupaVisible = useSharedValue(0);
     const lupaPosition = {
@@ -176,45 +212,73 @@ export default function PlayerScreen({ route }) {
         pdfY: useSharedValue(0),
     };
 
+    const navLockRef = useRef(false);
+
+    // Cooldown/coalescência para navegação de páginas
+    const MIN_PAGE_CHANGE_INTERVAL = 900; // ms
+    const lastPageChangeAtRef = useRef(0);
+    const pendingNavTimeoutRef = useRef(null);
+
+    const captureSnapshot = useCallback(async () => {
+        try {
+            if (pdfContainerRef.current) {
+                const uri = await captureRef(pdfContainerRef.current, {
+                    format: 'jpg',
+                    quality: 0.95,
+                    result: 'tmpfile',
+                });
+                if (uri) {
+                    setSnapshotUri(uri);
+                    setShowMagnifier(true);
+                }
+            }
+        } catch (e) {
+            console.warn('Falha ao capturar snapshot da página:', e);
+        }
+    }, []);
 
     const panGesture = Gesture.Pan()
         .onBegin((e) => {
-            if (pdfScale > 0) {
-                // Armazena a posição do toque (dedo)
+            if (pdfScale > 0 && !isPageLoading) {
+                // Posição do toque para posicionar o elemento visual da lupa
                 lupaPosition.touchX.value = e.x;
                 lupaPosition.touchY.value = e.y;
 
-                // Calcula a posição do CENTRO da Lupa na tela
-                const magnifierCenterX = e.x; // Horizontalmente, o centro da lupa e o dedo estão alinhados
-                const magnifierCenterY = e.y + LUPA_VERTICAL_OFFSET + (LUPA_SIZE / 2); // Verticalmente, consideramos o deslocamento
+                // Centro da lupa na tela
+                const magnifierCenterY = e.y + LUPA_VERTICAL_OFFSET + (LUPA_SIZE / 2);
 
-                // Converte as coordenadas do centro da lupa para as coordenadas do PDF original
-                lupaPosition.pdfX.value = (magnifierCenterX - pdfOffsets.left) / pdfScale;
+                // Converte as coordenadas do CENTRO da lupa para coords do PDF (antes do pdfScale)
+                lupaPosition.pdfX.value = (e.x - pdfOffsets.left) / pdfScale;
                 lupaPosition.pdfY.value = (magnifierCenterY - pdfOffsets.top) / pdfScale;
 
                 isLupaVisible.value = withSpring(1, { damping: 15, stiffness: 200 });
+                runOnJS(captureSnapshot)();
             }
         })
         .onUpdate((e) => {
-            if (pdfScale > 0) {
-                // Repete a mesma lógica durante o movimento
+            if (pdfScale > 0 && showMagnifier) {
+                // Atualiza a posição do toque
                 lupaPosition.touchX.value = e.x;
                 lupaPosition.touchY.value = e.y;
 
-                const magnifierCenterX = e.x;
+                // Centro da lupa na tela
                 const magnifierCenterY = e.y + LUPA_VERTICAL_OFFSET + (LUPA_SIZE / 2);
 
-                lupaPosition.pdfX.value = (magnifierCenterX - pdfOffsets.left) / pdfScale;
+                // Converte para coords do PDF (antes do pdfScale)
+                lupaPosition.pdfX.value = (e.x - pdfOffsets.left) / pdfScale;
                 lupaPosition.pdfY.value = (magnifierCenterY - pdfOffsets.top) / pdfScale;
             }
         })
         .onEnd(() => {
             isLupaVisible.value = withSpring(0);
+            runOnJS(setShowMagnifier)(false);
+            runOnJS(setSnapshotUri)(null);
         })
         .onFinalize(() => {
             isLupaVisible.value = withSpring(0);
+            runOnJS(setShowMagnifier)(false);
+            runOnJS(setSnapshotUri)(null);
         });
-
 
     const loadUpdatedBookData = useCallback(async () => {
         const library = await loadLibrary();
@@ -247,48 +311,54 @@ export default function PlayerScreen({ route }) {
         loadVoice();
     }, []);
 
+    // Escala e centraliza a página para caber inteira
     useEffect(() => {
-        if (pdfLayout.width > 1 && containerLayout.width > 0 && containerLayout.height > 0) {
-            // Calcula a escala para caber na largura e na altura
+        if (pdfLayout.width > 1 && pdfLayout.height > 1 && containerLayout.width > 0 && containerLayout.height > 0) {
             const scaleToFitWidth = containerLayout.width / pdfLayout.width;
             const scaleToFitHeight = containerLayout.height / pdfLayout.height;
             const scale = Math.min(scaleToFitWidth, scaleToFitHeight);
 
-            // Calcula as dimensões e os deslocamentos
             const scaledPdfWidth = pdfLayout.width * scale;
             const scaledPdfHeight = pdfLayout.height * scale;
             const topOffset = (containerLayout.height - scaledPdfHeight) / 2;
             const leftOffset = (containerLayout.width - scaledPdfWidth) / 2;
 
-            // 1. Primeiro, agenda as atualizações de layout
             setPdfScale(scale);
             setPdfOffsets({ top: topOffset, left: leftOffset });
-
-            // 2. SÓ DEPOIS, sinaliza que o carregamento terminou
             setIsPageLoading(false);
         }
     }, [pdfLayout, containerLayout]);
 
+    // Atualiza dados da página e usa dimensões conhecidas (OCR) para escalar
     useEffect(() => {
         setIsPageLoading(true);
+        setShowMagnifier(false);
+        setSnapshotUri(null);
+
         if (bookInfo.pagesData && bookInfo.pagesData[currentPageIndex]) {
             const newPageData = bookInfo.pagesData[currentPageIndex];
             setPageData(newPageData);
             setCurrentWordIndex(-1);
 
-            if (newPageData.dimensoes && newPageData.dimensoes.largura > 0) {
+            // Usa dimensões do OCR (confiáveis para manter proporção)
+            if (newPageData.dimensoes?.largura && newPageData.dimensoes?.altura) {
                 setPdfLayout({
                     width: newPageData.dimensoes.largura,
                     height: newPageData.dimensoes.altura
                 });
+            } else {
+                // fallback mínimo (evita ficar sem nada)
+                setPdfLayout({ width: 1000, height: 1414 }); // proporção A4 aproximada
             }
         }
     }, [currentPageIndex, bookInfo.pagesData]);
 
+    // Continua leitura automaticamente ao trocar de página se já estava tocando
     useEffect(() => {
         if (isPlaying && pageData?.texto_completo) {
             startSpeech(pageData.texto_completo, playbackRate, 0, activeVoice);
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pageData]);
 
     useEffect(() => {
@@ -322,6 +392,71 @@ export default function PlayerScreen({ route }) {
         }
     };
 
+    // Navegação segura (com lock baseado no intervalo mínimo)
+    const safeGoTo = useCallback((deltaOrIndex, absolute = false, options = { continueSpeech: false }) => {
+        if (navLockRef.current) return;
+        navLockRef.current = true;
+
+        const continueSpeech = !!options.continueSpeech;
+
+        setShowMagnifier(false);
+        setSnapshotUri(null);
+        setIsPageLoading(true);
+
+        Speech.stop(); // evita sobreposição
+
+        if (!continueSpeech) {
+            setIsPlaying(false);
+            stopTimer();
+        }
+        setCurrentWordIndex(-1);
+
+        setCurrentPageIndex(prev => {
+            if (absolute) return deltaOrIndex;
+            return prev + deltaOrIndex;
+        });
+
+        // libera o lock após o intervalo mínimo
+        setTimeout(() => { navLockRef.current = false; }, MIN_PAGE_CHANGE_INTERVAL);
+    }, [stopTimer]);
+
+    // Throttle/coalesce para evitar muitas trocas em sequência
+    const throttledGoTo = useCallback((deltaOrIndex, absolute = false, options = { continueSpeech: false }) => {
+        const now = Date.now();
+        const elapsed = now - lastPageChangeAtRef.current;
+
+        const schedule = (delayMs) => {
+            if (pendingNavTimeoutRef.current) clearTimeout(pendingNavTimeoutRef.current);
+            pendingNavTimeoutRef.current = setTimeout(() => {
+                pendingNavTimeoutRef.current = null;
+                lastPageChangeAtRef.current = Date.now();
+                safeGoTo(deltaOrIndex, absolute, options);
+            }, Math.max(0, delayMs));
+        };
+
+        if (isPageLoading || navLockRef.current) {
+            schedule(150);
+            return;
+        }
+
+        if (elapsed >= MIN_PAGE_CHANGE_INTERVAL) {
+            lastPageChangeAtRef.current = now;
+            safeGoTo(deltaOrIndex, absolute, options);
+        } else {
+            schedule(MIN_PAGE_CHANGE_INTERVAL - elapsed);
+        }
+    }, [safeGoTo, isPageLoading]);
+
+    // Limpeza do timeout pendente ao desmontar
+    useEffect(() => {
+        return () => {
+            if (pendingNavTimeoutRef.current) {
+                clearTimeout(pendingNavTimeoutRef.current);
+                pendingNavTimeoutRef.current = null;
+            }
+        };
+    }, []);
+
     const startSpeech = useCallback((textToSpeak, rate, fromWordIndex, voiceIdentifier) => {
         if (!textToSpeak || !textToSpeak.trim()) { setIsPlaying(false); return; }
         const words = textToSpeak.split(/\s+/);
@@ -334,7 +469,8 @@ export default function PlayerScreen({ route }) {
             onDone: () => {
                 if (isPlayingRef.current) {
                     if (currentPageIndex < bookInfo.total_paginas - 1) {
-                        setCurrentPageIndex(prev => prev + 1);
+                        // Avança e continua lendo com throttle
+                        throttledGoTo(1, false, { continueSpeech: true });
                     } else {
                         setIsPlaying(false);
                         stopTimer();
@@ -356,17 +492,13 @@ export default function PlayerScreen({ route }) {
                 }
             },
         });
-    }, [currentPageIndex, bookInfo.total_paginas]);
-
-    const stopPlayback = () => {
-        Speech.stop();
-        setIsPlaying(false);
-        stopTimer();
-    };
+    }, [currentPageIndex, bookInfo.total_paginas, throttledGoTo]);
 
     const handlePlayPause = () => {
         if (isPlaying) {
-            stopPlayback();
+            Speech.stop();
+            setIsPlaying(false);
+            stopTimer();
         } else {
             if (pageData?.texto_completo) {
                 setIsPlaying(true);
@@ -377,16 +509,18 @@ export default function PlayerScreen({ route }) {
     };
 
     const handleNext = () => {
+        if (isPageLoading) return;
         if (currentPageIndex < bookInfo.total_paginas - 1) {
-            stopPlayback();
-            setCurrentPageIndex((prev) => prev + 1);
+            // manual pausa
+            throttledGoTo(1, false, { continueSpeech: false });
         }
     };
 
     const handlePrevious = () => {
+        if (isPageLoading) return;
         if (currentPageIndex > 0) {
-            stopPlayback();
-            setCurrentPageIndex((prev) => prev - 1);
+            // manual pausa
+            throttledGoTo(-1, false, { continueSpeech: false });
         }
     };
 
@@ -399,8 +533,7 @@ export default function PlayerScreen({ route }) {
     };
 
     const handleJumpToBookmark = (pageIndex) => {
-        stopPlayback();
-        setCurrentPageIndex(pageIndex);
+        throttledGoTo(pageIndex, true, { continueSpeech: false });
         setBookmarkModalVisible(false);
     };
 
@@ -423,7 +556,6 @@ export default function PlayerScreen({ route }) {
         loadUpdatedBookData();
     };
 
-
     const getWordCoordinates = (wordIndex) => {
         if (!pageData?.palavras || wordIndex < 0 || wordIndex >= pageData.palavras.length) {
             return null;
@@ -432,7 +564,8 @@ export default function PlayerScreen({ route }) {
     };
 
     const renderContent = () => {
-        if (isPageLoading || !pageData) {
+        if (!pageData || isPageLoading || !pdfAvailable) {
+            if (!pdfAvailable) return <PdfFallback colors={colors} />;
             return <ActivityIndicator size="large" color={colors.primary} style={styles.centered} />;
         }
 
@@ -440,39 +573,39 @@ export default function PlayerScreen({ route }) {
             return <HighlightedText text={pageData.texto_completo} currentWordIndex={currentWordIndex} colors={colors} />;
         }
 
-        if (!pdfAvailable) {
-            return <PdfFallback colors={colors} />;
-        }
-
         const wordData = getWordCoordinates(currentWordIndex);
 
         return (
             <GestureDetector gesture={panGesture}>
-                {/* Usamos um container que preenche a área para posicionar os elementos */}
                 <View style={styles.flexOne}>
-                    {/* Container do PDF posicionado de forma absoluta para garantir a centralização */}
+                    {/* Container absoluto que renderiza a página inteira centralizada */}
                     <View
+                        ref={pdfContainerRef}
+                        collapsable={false}
                         style={{
                             position: 'absolute',
                             left: pdfOffsets.left,
                             top: pdfOffsets.top,
                             width: pdfLayout.width * pdfScale,
                             height: pdfLayout.height * pdfScale,
+                            overflow: 'hidden',
+                            backgroundColor: '#fff',
                         }}
                     >
                         <Pdf
-                            key={`pdf-page-${currentPageIndex}`}
-                            source={{ uri: bookInfo.localUri }}
+                            source={pdfSource}
                             page={currentPageIndex + 1}
-                            style={styles.flexOne} // Ocupa todo o container
-                            onError={(error) => console.error('Erro ao carregar PDF local:', error)}
-                            fitPolicy={0} // A política de ajuste não é mais crítica, mas pode ser mantida
-                            enablePaging={false}
+                            // Mantém o PDF estático; o container já controla tamanho/centralização
                             enableDoubleTapZoom={false}
+                            enablePaging={false}
+                            spacing={0}
+                            fitPolicy={2}
+                            style={{ width: '100%', height: '100%' }}
+                            onError={(error) => console.error('Erro ao carregar PDF local:', error)}
                         />
                     </View>
 
-                    {/* Destaque de palavra (agora usará os offsets corretos) */}
+                    {/* Destaque alinhado ao PDF */}
                     {wordData?.coords && pdfScale > 0 && (
                         <View
                             pointerEvents="none"
@@ -490,21 +623,23 @@ export default function PlayerScreen({ route }) {
                         />
                     )}
 
-                    {/* A Lupa (agora receberá as coordenadas corretas) */}
-                    <Magnifier
-                        source={{ uri: bookInfo.localUri }}
-                        page={currentPageIndex + 1}
-                        isVisible={isLupaVisible}
-                        position={lupaPosition}
-                        pdfLayout={pdfLayout}
-                        // Adicione as duas linhas abaixo
-                        pageData={pageData}
-                        currentWordIndex={currentWordIndex}
-                    />
+                    {/* Lupa com zoom */}
+                    {showMagnifier && snapshotUri && (
+                        <Magnifier
+                            snapshotUri={snapshotUri}
+                            isVisible={isLupaVisible}
+                            position={lupaPosition}
+                            pdfLayout={pdfLayout}
+                            pdfScale={pdfScale}
+                            pageData={pageData}
+                            currentWordIndex={currentWordIndex}
+                        />
+                    )}
                 </View>
             </GestureDetector>
         );
     };
+
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             <Modal animationType="slide" transparent={true} visible={annotationModalVisible} onRequestClose={() => setAnnotationModalVisible(false)}>
@@ -553,9 +688,9 @@ export default function PlayerScreen({ route }) {
             <View style={[styles.controlsContainer, { borderTopColor: colors.subtext }]}>
                 <Text style={[styles.pageIndicator, { color: colors.subtext }]}>Página {currentPageIndex + 1} de {bookInfo.total_paginas}</Text>
                 <View style={styles.playerControls}>
-                    <TouchableOpacity onPress={handlePrevious} disabled={currentPageIndex === 0}><Ionicons name="play-skip-back-circle-outline" size={50} color={currentPageIndex === 0 ? colors.subtext : colors.text} /></TouchableOpacity>
+                    <TouchableOpacity onPress={handlePrevious} disabled={currentPageIndex === 0 || isPageLoading}><Ionicons name="play-skip-back-circle-outline" size={50} color={currentPageIndex === 0 || isPageLoading ? colors.subtext : colors.text} /></TouchableOpacity>
                     <TouchableOpacity onPress={handlePlayPause} disabled={!pageData}><Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={80} color={!pageData ? colors.subtext : colors.primary} /></TouchableOpacity>
-                    <TouchableOpacity onPress={handleNext} disabled={currentPageIndex >= bookInfo.total_paginas - 1}><Ionicons name="play-skip-forward-circle-outline" size={50} color={currentPageIndex >= bookInfo.total_paginas - 1 ? colors.subtext : colors.text} /></TouchableOpacity>
+                    <TouchableOpacity onPress={handleNext} disabled={currentPageIndex >= bookInfo.total_paginas - 1 || isPageLoading}><Ionicons name="play-skip-forward-circle-outline" size={50} color={currentPageIndex >= bookInfo.total_paginas - 1 || isPageLoading ? colors.subtext : colors.text} /></TouchableOpacity>
                 </View>
                 <View style={styles.speedControls}>
                     <Text style={[styles.speedLabel, { color: colors.text }]}>Velocidade:</Text>
@@ -575,7 +710,6 @@ const styles = StyleSheet.create({
     contentArea: { flex: 3, overflow: 'hidden' },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     flexOne: { flex: 1 },
-    pdf: {},
     lupaContainer: {
         position: 'absolute',
         width: LUPA_SIZE,
@@ -588,6 +722,7 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.5,
         shadowRadius: 10,
         shadowOffset: { width: 0, height: 5 },
+        backgroundColor: '#fff',
     },
     wordHighlight: { position: 'absolute', opacity: 0.4, borderRadius: 3, },
     textContainerScrollView: { padding: 20 },
@@ -612,7 +747,6 @@ const styles = StyleSheet.create({
     annotationInput: { height: 150, textAlignVertical: 'top', padding: 15, fontSize: 16, borderRadius: 8, borderWidth: 1, marginBottom: 20 },
     modalButtons: { flexDirection: 'row', justifyContent: 'flex-end' },
     cancelButton: { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, marginRight: 10 },
-    cancelButtonText: { fontSize: 16, fontWeight: '500' },
     saveButton: { paddingVertical: 10, paddingHorizontal: 25, borderRadius: 8 },
     saveButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
     headerButtons: { flexDirection: 'row', alignItems: 'center' },
