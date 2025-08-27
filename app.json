@@ -2,7 +2,7 @@
   "expo": {
     "name": "HearLearn",
     "slug": "hearlearn",
-    "version": "1.0.2",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/IconApp.png",
     "userInterfaceStyle": "automatic",
