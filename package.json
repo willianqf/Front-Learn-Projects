@@ -18,7 +18,7 @@
     "@react-navigation/stack": "^7.4.2",
     "axios": "^1.10.0",
     "base-64": "^1.0.0",
-    "expo": "~53.0.17",
+    "expo": "53.0.22",
     "expo-av": "~15.1.7",
     "expo-build-properties": "~0.14.8",
     "expo-document-picker": "~13.1.6",
@@ -33,9 +33,10 @@
     "react-native-gesture-handler": "~2.24.0",
     "react-native-pdf": "^6.7.7",
     "react-native-reanimated": "~3.17.4",
-    "react-native-safe-area-context": "^5.5.1",
+    "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "^4.11.1",
-    "react-native-view-shot": "^4.0.3"
+    "react-native-view-shot": "^4.0.3",
+    "expo-font": "~13.3.2"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
