@@ -4,7 +4,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 
 const LIBRARY_KEY = '@HearLearn:library';
-const BOOK_DATA_PREFIX = '@HearLearn:book_data_';
 
 // Função para obter o caminho do arquivo de dados de um livro
 const getBookDataPath = (bookId) => `${FileSystem.documentDirectory}book-data/${bookId}.json`;
@@ -20,7 +19,7 @@ export const loadLibrary = async () => {
     }
 };
 
-// Salva a lista de metadados dos livros
+// Salva a lista de metadados dos livros (função interna)
 const saveLibrary = async (library) => {
     const jsonValue = JSON.stringify(library);
     await AsyncStorage.setItem(LIBRARY_KEY, jsonValue);
@@ -42,29 +41,34 @@ export const loadBookPages = async (bookId) => {
     }
 };
 
-// Salva um livro: metadados na lista principal, dados das páginas em arquivo separado
-export const saveBook = async (bookData) => {
+// NOVO: Adiciona os dados de uma nova página ao arquivo de um livro
+export const appendPageData = async (bookId, newPageData) => {
+    const dir = `${FileSystem.documentDirectory}book-data/`;
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    const filePath = getBookDataPath(bookId);
+    try {
+        const existingPages = await loadBookPages(bookId) || [];
+        const updatedPages = [...existingPages, newPageData];
+        await FileSystem.writeAsStringAsync(filePath, JSON.stringify(updatedPages));
+        return updatedPages.length; // Retorna o número de páginas processadas
+    } catch (e) {
+        console.error(`Erro ao adicionar página ao livro ${bookId}:`, e);
+        return 0;
+    }
+};
+
+// ATUALIZADO: Salva um novo livro na biblioteca (apenas metadados).
+export const saveBook = async (bookMetadata) => {
     try {
         let library = await loadLibrary();
-        const { pagesData, ...bookMetadata } = bookData;
+        const { pagesData, ...metadata } = bookMetadata; // Garante que pagesData não seja salvo nos metadados
 
-        // Garante que o diretório para os dados dos livros exista
-        await FileSystem.makeDirectoryAsync(`${FileSystem.documentDirectory}book-data/`, { intermediates: true });
+        const bookIndex = library.findIndex(book => book.id_arquivo === metadata.id_arquivo);
 
-        // Salva os dados das páginas em um arquivo JSON separado
-        if (pagesData) {
-            const filePath = getBookDataPath(bookMetadata.id_arquivo);
-            await FileSystem.writeAsStringAsync(filePath, JSON.stringify(pagesData));
-        }
-
-        const bookIndex = library.findIndex(book => book.id_arquivo === bookMetadata.id_arquivo);
-
-        if (bookIndex !== -1) {
-            library[bookIndex] = { ...library[bookIndex], ...bookMetadata };
-        } else {
+        if (bookIndex === -1) {
             const newBook = {
-                ...bookMetadata,
-                status: bookMetadata.status || 'ready',
+                ...metadata,
+                status: 'processing', // O status inicial é sempre 'processando'
                 lastPosition: 0,
                 listeningTime: 0,
                 completed: false,
@@ -72,11 +76,32 @@ export const saveBook = async (bookData) => {
                 annotations: {},
             };
             library.push(newBook);
-        }
+            await saveLibrary(library);
 
-        await saveLibrary(library);
+            // Cria um arquivo de páginas vazio para o livro
+            const dir = `${FileSystem.documentDirectory}book-data/`;
+            await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+            const filePath = getBookDataPath(metadata.id_arquivo);
+            await FileSystem.writeAsStringAsync(filePath, JSON.stringify([]));
+        }
     } catch (e) {
         console.error("Erro ao salvar o livro.", e);
+    }
+};
+
+// NOVO: Atualiza o status de um livro (ex: 'processing' para 'ready' ou 'failed')
+export const updateBookStatus = async (bookId, status) => {
+    try {
+        let library = await loadLibrary();
+        const newLibrary = library.map(book => {
+            if (book.id_arquivo === bookId) {
+                return { ...book, status: status };
+            }
+            return book;
+        });
+        await saveLibrary(newLibrary);
+    } catch (e) {
+        console.error(`Erro ao atualizar status do livro ${bookId}:`, e);
     }
 };
 
@@ -86,16 +111,13 @@ export const removeBook = async (bookId) => {
         let library = await loadLibrary();
         const bookToRemove = library.find(book => book.id_arquivo === bookId);
 
-        // Remove da lista
         const newLibrary = library.filter(book => book.id_arquivo !== bookId);
         await saveLibrary(newLibrary);
 
-        // Remove o arquivo de dados JSON
         const dataPath = getBookDataPath(bookId);
         await FileSystem.deleteAsync(dataPath, { idempotent: true });
         console.log(`Dados do livro removidos: ${dataPath}`);
 
-        // Remove o arquivo PDF local
         if (bookToRemove?.localUri) {
             await FileSystem.deleteAsync(bookToRemove.localUri, { idempotent: true });
             console.log(`Arquivo PDF local removido: ${bookToRemove.localUri}`);
@@ -107,9 +129,7 @@ export const removeBook = async (bookId) => {
 };
 
 
-// As funções abaixo (updateBookState, bookmarks, annotations) modificam
-// os metadados do livro, então elas operam na lista principal da biblioteca.
-// Não precisam de grandes alterações.
+// --- Funções Originais Mantidas ---
 
 export const updateBookState = async (bookId, pageIndex, timeIncrement) => {
     try {
